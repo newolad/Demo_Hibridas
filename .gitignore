@@ -1,0 +1,8 @@
+node_modules/
+www/
+dist/
+.angular/
+.DS_Store
+# Archivos de credenciales nativas (se descargan desde Firebase Console)
+android/app/google-services.json
+ios/App/App/GoogleService-Info.plist

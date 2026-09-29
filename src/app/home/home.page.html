@@ -1,0 +1,94 @@
+<ion-header>
+  <ion-toolbar color="primary">
+    <ion-title>Gestor de Tareas</ion-title>
+    @if (user$ | async; as user) {
+      <ion-buttons slot="end">
+        <ion-button (click)="logout()" aria-label="Cerrar sesión">
+          <ion-icon slot="icon-only" name="log-out-outline"></ion-icon>
+        </ion-button>
+      </ion-buttons>
+    }
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  @if ((user$ | async) === undefined) {
+    <!-- Resolviendo sesión persistida -->
+    <div class="ion-text-center ion-padding"><ion-spinner></ion-spinner></div>
+  } @else if (user$ | async; as user) {
+    <!-- ESTADO 2: Panel principal -->
+    <ion-card>
+      <ion-card-header>
+        <ion-card-title>Sesión activa</ion-card-title>
+      </ion-card-header>
+      <ion-card-content>
+        Conectado como <strong>{{ user.email }}</strong>
+        <ion-button fill="outline" size="small" class="ion-margin-start" (click)="logout()">Cerrar sesión</ion-button>
+      </ion-card-content>
+    </ion-card>
+
+    <ion-card>
+      <ion-card-header>
+        <ion-card-title>Mis tareas (tiempo real)</ion-card-title>
+      </ion-card-header>
+      <ion-card-content>
+        <ion-item>
+          <ion-input
+            label="Nueva tarea"
+            labelPlacement="floating"
+            [(ngModel)]="newTitle"
+            (keyup.enter)="addTask(user.uid)"
+          ></ion-input>
+          <ion-button slot="end" (click)="addTask(user.uid)">Agregar</ion-button>
+        </ion-item>
+
+        @if (tasks$ | async; as tasks) {
+          <ion-list>
+            @for (task of tasks; track task.id) {
+              <ion-item>
+                <ion-checkbox slot="start" [checked]="task.done" (ionChange)="toggleDone(task)"></ion-checkbox>
+                <ion-label [style.text-decoration]="task.done ? 'line-through' : 'none'">{{ task.title }}</ion-label>
+                <ion-button fill="clear" slot="end" (click)="editTask(task)" aria-label="Editar">
+                  <ion-icon slot="icon-only" name="create-outline"></ion-icon>
+                </ion-button>
+                <ion-button fill="clear" color="danger" slot="end" (click)="deleteTask(task)" aria-label="Eliminar">
+                  <ion-icon slot="icon-only" name="trash-outline"></ion-icon>
+                </ion-button>
+              </ion-item>
+            } @empty {
+              <ion-item lines="none"><ion-note>No hay tareas todavía. ¡Agrega la primera!</ion-note></ion-item>
+            }
+          </ion-list>
+        }
+      </ion-card-content>
+    </ion-card>
+  } @else {
+    <!-- ESTADO 1: Login / Registro -->
+    <ion-card>
+      <ion-card-header>
+        <ion-card-title>{{ isRegisterMode ? 'Crear cuenta' : 'Iniciar sesión' }}</ion-card-title>
+      </ion-card-header>
+      <ion-card-content>
+        <ion-list>
+          <ion-item>
+            <ion-input label="Correo" labelPlacement="floating" type="email" [(ngModel)]="email"></ion-input>
+          </ion-item>
+          <ion-item>
+            <ion-input label="Contraseña" labelPlacement="floating" type="password" [(ngModel)]="password" (keyup.enter)="submitAuth()"></ion-input>
+          </ion-item>
+        </ion-list>
+
+        @if (errorMsg) {
+          <ion-note color="danger" class="ion-padding-top" style="display:block">{{ errorMsg }}</ion-note>
+        }
+
+        <ion-button expand="block" class="ion-margin-top" [disabled]="loading || !email || !password" (click)="submitAuth()">
+          {{ isRegisterMode ? 'Registrarme' : 'Entrar' }}
+        </ion-button>
+        <ion-button expand="block" fill="clear" (click)="toggleMode()">
+          {{ isRegisterMode ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate' }}
+        </ion-button>
+      </ion-card-content>
+    </ion-card>
+  }
+</ion-content>
