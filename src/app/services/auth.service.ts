@@ -1,5 +1,7 @@
 /**
  * MÓDULO 2 – Firebase Authentication
+ * Al registrar un usuario nuevo, crea automáticamente su perfil en Firestore
+ * con role: "client". El administrador se designa manualmente en Firestore.
  */
 import { Injectable, NgZone } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
@@ -11,6 +13,7 @@ import {
   signOut,
 } from 'firebase/auth';
 import { auth } from '../config/firebase.config';
+import { FirestoreService } from './firestore.service';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -21,26 +24,18 @@ export class AuthService {
   private userSubject = new BehaviorSubject<User | null | undefined>(undefined);
   readonly user$ = this.userSubject.asObservable();
 
-  constructor(private zone: NgZone) {
-    /**
-     * PERSISTENCIA DE CREDENCIALES:
-     * getAuth() usa por defecto `indexedDBLocalPersistence` en WebView (Capacitor/Cordova),
-     * con respaldo en localStorage. El token de sesión (refresh token) se guarda en el
-     * almacenamiento del propio dispositivo, dentro del sandbox de la app. Al reabrir la
-     * app, el SDK lo lee, lo renueva y dispara onAuthStateChanged con el usuario, sin
-     * pedir credenciales otra vez. signOut() borra ese token del almacenamiento.
-     * (Alternativas: browserSessionPersistence = solo la sesión; inMemoryPersistence = nada.)
-     *
-     * onAuthStateChanged() es el observador en tiempo real: se dispara al iniciar la app,
-     * al hacer login/registro y al cerrar sesión. Usamos NgZone.run para que Angular
-     * detecte el cambio y actualice la vista.
-     */
+  constructor(private zone: NgZone, private fs: FirestoreService) {
     onAuthStateChanged(auth, (user) => this.zone.run(() => this.userSubject.next(user)));
   }
 
-  /** Registro con correo y contraseña. */
-  register(email: string, password: string) {
-    return createUserWithEmailAndPassword(auth, email, password);
+  /**
+   * Registro con correo y contraseña.
+   * Después de crear la cuenta en Auth, crea el perfil en Firestore con role "client".
+   */
+  async register(email: string, password: string) {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    await this.fs.createUserProfile(cred.user.uid, email);
+    return cred;
   }
 
   /** Inicio de sesión con correo y contraseña. */
