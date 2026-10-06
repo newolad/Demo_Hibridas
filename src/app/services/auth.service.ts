@@ -1,7 +1,11 @@
 /**
  * MÓDULO 2 – Firebase Authentication
- * Al registrar un usuario nuevo, crea automáticamente su perfil en Firestore
- * con role: "client". El administrador se designa manualmente en Firestore.
+ *
+ * El perfil en Firestore (`users/{uid}`) NO se crea aquí: lo resuelve
+ * FirestoreService.ensureUserProfile() cuando onAuthStateChanged emite el
+ * usuario. Así se evita la condición de carrera entre el registro y la
+ * primera lectura del perfil, y los usuarios creados antes de que existiera
+ * la colección `users` también obtienen su perfil automáticamente.
  */
 import { Injectable, NgZone } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
@@ -13,7 +17,6 @@ import {
   signOut,
 } from 'firebase/auth';
 import { auth } from '../config/firebase.config';
-import { FirestoreService } from './firestore.service';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -24,18 +27,13 @@ export class AuthService {
   private userSubject = new BehaviorSubject<User | null | undefined>(undefined);
   readonly user$ = this.userSubject.asObservable();
 
-  constructor(private zone: NgZone, private fs: FirestoreService) {
+  constructor(private zone: NgZone) {
     onAuthStateChanged(auth, (user) => this.zone.run(() => this.userSubject.next(user)));
   }
 
-  /**
-   * Registro con correo y contraseña.
-   * Después de crear la cuenta en Auth, crea el perfil en Firestore con role "client".
-   */
-  async register(email: string, password: string) {
-    const cred = await createUserWithEmailAndPassword(auth, email, password);
-    await this.fs.createUserProfile(cred.user.uid, email);
-    return cred;
+  /** Registro con correo y contraseña. */
+  register(email: string, password: string) {
+    return createUserWithEmailAndPassword(auth, email, password);
   }
 
   /** Inicio de sesión con correo y contraseña. */

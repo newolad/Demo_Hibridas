@@ -2,7 +2,7 @@
  * MÓDULO 3 – Firestore (NoSQL) con CRUD modular y tiempo real
  *
  * Colecciones:
- *  · `users/{uid}`  → perfil del usuario: { email, role, createdAt }
+ *  · `users/{uid}`  → perfil del usuario: { uid, email, role, createdAt }
  *                     role puede ser "client" | "admin"
  *  · `tasks/{id}`   → tarea: { title, done, uid, createdAt, deadline? }
  */
@@ -52,27 +52,55 @@ export class FirestoreService {
   // ─────────────────────────────────────────────────────────────
 
   /**
-   * Crea el perfil del usuario en Firestore al registrarse.
-   * Usa setDoc con el uid como ID del documento para que sea predecible.
-   * El rol por defecto es "client".
+   * Devuelve el perfil del usuario; si no existe lo crea con role "client".
+   * Esto cubre tres casos:
+   *  · Usuario nuevo recién registrado.
+   *  · Usuario creado antes de que existiera la colección `users`.
+   *  · Fallo transitorio al crear el perfil durante el registro.
+   *
+   * Si Firestore rechaza la operación (p. ej. reglas sin publicar) se devuelve
+   * un perfil "client" en memoria para que la interfaz nunca quede vacía,
+   * y el error queda registrado en consola para diagnóstico.
    */
-  createUserProfile(uid: string, email: string): Promise<void> {
-    console.log('[Firestore] createUserProfile → uid:', uid, '| email:', email);
-    return setDoc(doc(db, 'users', uid), {
-      uid,
-      email,
-      role: 'client',
-      createdAt: serverTimestamp(),
-    });
+  async ensureUserProfile(uid: string, email: string): Promise<UserProfile> {
+    try {
+      const snap = await getDoc(doc(db, 'users', uid));
+
+      if (snap.exists()) {
+        const profile = snap.data() as UserProfile;
+        console.log('[Firestore] ensureUserProfile → perfil existente:', profile);
+        return profile;
+      }
+
+      console.log('[Firestore] ensureUserProfile → no existe, creando con role "client" para uid:', uid);
+      await setDoc(doc(db, 'users', uid), {
+        uid,
+        email,
+        role: 'client',
+        createdAt: serverTimestamp(),
+      });
+      return { uid, email, role: 'client' };
+    } catch (err) {
+      console.error(
+        '[Firestore] ensureUserProfile → ERROR al leer/crear el perfil.',
+        'Revisa que las reglas de Firestore estén publicadas en Firebase Console.',
+        err,
+      );
+      return { uid, email, role: 'client' };
+    }
   }
 
-  /** Lee el perfil de un usuario por su uid. */
-  async getUserProfile(uid: string): Promise<UserProfile | null> {
-    const snap = await getDoc(doc(db, 'users', uid));
-    if (!snap.exists()) return null;
-    const profile = snap.data() as UserProfile;
-    console.log('[Firestore] getUserProfile → perfil leído:', profile);
-    return profile;
+  /** Lee todos los perfiles de usuario (solo el admin tiene permiso). */
+  async getAllUserProfiles(): Promise<UserProfile[]> {
+    try {
+      const snap = await getDocs(this.usersRef);
+      const profiles = snap.docs.map((d) => d.data() as UserProfile);
+      console.log('[Firestore] getAllUserProfiles → perfiles leídos:', profiles.length);
+      return profiles;
+    } catch (err) {
+      console.error('[Firestore] getAllUserProfiles → ERROR (¿reglas publicadas?):', err);
+      return [];
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -99,9 +127,7 @@ export class FirestoreService {
     return deleteDoc(doc(db, 'tasks', id));
   }
 
-  /**
-   * TIEMPO REAL (cliente) – escucha solo las tareas del usuario activo.
-   */
+  /** TIEMPO REAL (cliente) – escucha solo las tareas del usuario activo. */
   watchTasks(uid: string): Observable<Task[]> {
     console.log('[Firestore] watchTasks → abriendo canal tiempo real para uid:', uid);
     return new Observable<Task[]>((subscriber) => {
@@ -114,10 +140,11 @@ export class FirestoreService {
             console.log('[Firestore] watchTasks → snapshot recibido, tareas:', tasks);
             subscriber.next(tasks);
           }),
-        (err) => this.zone.run(() => {
-          console.error('[Firestore] watchTasks → error en snapshot:', err);
-          subscriber.error(err);
-        }),
+        (err) =>
+          this.zone.run(() => {
+            console.error('[Firestore] watchTasks → error en snapshot:', err);
+            subscriber.next([]);
+          }),
       );
       return () => {
         console.log('[Firestore] watchTasks → cerrando canal para uid:', uid);
@@ -132,8 +159,8 @@ export class FirestoreService {
 
   /**
    * TIEMPO REAL (admin) – escucha TODAS las tareas de TODOS los usuarios.
-   * Las agrupa por uid en un Map para que la vista pueda mostrarlas
-   * identificadas por email de cada cliente.
+   * Si las reglas rechazan la lectura se emite una lista vacía en lugar de
+   * propagar el error, para que el panel siga siendo usable.
    */
   watchAllTasks(): Observable<Task[]> {
     console.log('[Firestore] watchAllTasks → abriendo canal admin (todas las tareas)');
@@ -146,23 +173,16 @@ export class FirestoreService {
             console.log('[Firestore] watchAllTasks → total tareas recibidas:', tasks.length);
             subscriber.next(tasks);
           }),
-        (err) => this.zone.run(() => {
-          console.error('[Firestore] watchAllTasks → error:', err);
-          subscriber.error(err);
-        }),
+        (err) =>
+          this.zone.run(() => {
+            console.error('[Firestore] watchAllTasks → ERROR (¿reglas publicadas?):', err);
+            subscriber.next([]);
+          }),
       );
       return () => {
         console.log('[Firestore] watchAllTasks → cerrando canal admin');
         unsubscribe();
       };
     });
-  }
-
-  /** Lee todos los perfiles de usuario (solo usado por el admin). */
-  async getAllUserProfiles(): Promise<UserProfile[]> {
-    const snap = await getDocs(this.usersRef);
-    const profiles = snap.docs.map((d) => d.data() as UserProfile);
-    console.log('[Firestore] getAllUserProfiles → perfiles leídos:', profiles.length);
-    return profiles;
   }
 }

@@ -1,38 +1,48 @@
 /**
  * MÓDULO 4 – Lógica de la vista.
  *
- * Tres estados según el usuario y su rol:
- *  Estado 0: user$ === undefined  → resolviendo sesión (spinner)
- *  Estado 1: user$ === null       → sin sesión (formulario login/registro)
- *  Estado 2: sesión activa + role "client"  → panel de tareas propias
- *  Estado 3: sesión activa + role "admin"   → panel de todas las tareas
+ * La vista se construye a partir de `profile$`, que combina la sesión de
+ * Firebase Auth con el perfil guardado en Firestore:
+ *
+ *   profile$ === undefined → resolviendo sesión o perfil  → spinner
+ *   profile$ === null      → sin sesión                   → login / registro
+ *   profile$.role 'client' → panel de tareas propias
+ *   profile$.role 'admin'  → panel con las tareas de todos los clientes
  */
-import { Component, inject, OnInit } from '@angular/core';
-import { AsyncPipe, CommonModule } from '@angular/common';
+import { Component, inject } from '@angular/core';
+import { AsyncPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Observable, of, switchMap } from 'rxjs';
+import { Observable, combineLatest, from, of } from 'rxjs';
+import { map, shareReplay, startWith, switchMap } from 'rxjs/operators';
 import {
-  IonButton, IonButtons, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonCardSubtitle,
-  IonCheckbox, IonContent, IonHeader, IonIcon, IonInput, IonItem, IonLabel, IonList, IonNote,
-  IonSpinner, IonTitle, IonToolbar, IonBadge, AlertController,
+  IonBadge, IonButton, IonButtons, IonCard, IonCardContent, IonCardHeader, IonCardSubtitle,
+  IonCardTitle, IonCheckbox, IonContent, IonHeader, IonIcon, IonInput, IonItem, IonLabel,
+  IonList, IonNote, IonSpinner, IonTitle, IonToolbar, AlertController,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { createOutline, logOutOutline, trashOutline, peopleOutline } from 'ionicons/icons';
+import { createOutline, logOutOutline, peopleOutline, trashOutline } from 'ionicons/icons';
 import { AuthService } from '../services/auth.service';
 import { FirestoreService, Task, UserProfile } from '../services/firestore.service';
+
+/** Tareas de un cliente agrupadas para el panel del administrador. */
+interface UserTaskGroup {
+  uid: string;
+  email: string;
+  tasks: Task[];
+}
 
 @Component({
   selector: 'app-home',
   standalone: true,
   templateUrl: './home.page.html',
   imports: [
-    AsyncPipe, CommonModule, FormsModule,
-    IonButton, IonButtons, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonCardSubtitle,
-    IonCheckbox, IonContent, IonHeader, IonIcon, IonInput, IonItem, IonLabel, IonList, IonNote,
-    IonSpinner, IonTitle, IonToolbar, IonBadge,
+    AsyncPipe, FormsModule,
+    IonBadge, IonButton, IonButtons, IonCard, IonCardContent, IonCardHeader, IonCardSubtitle,
+    IonCardTitle, IonCheckbox, IonContent, IonHeader, IonIcon, IonInput, IonItem, IonLabel,
+    IonList, IonNote, IonSpinner, IonTitle, IonToolbar,
   ],
 })
-export class HomePage implements OnInit {
+export class HomePage {
   private auth = inject(AuthService);
   private fs = inject(FirestoreService);
   private alertCtrl = inject(AlertController);
@@ -48,57 +58,57 @@ export class HomePage implements OnInit {
   newTitle = '';
   newDeadline = '';
 
-  /** Rol del usuario activo. Se carga tras el login. */
-  userRole: 'client' | 'admin' | null = null;
-
-  /** Perfiles de todos los usuarios (solo admin los usa para mostrar emails). */
-  userProfiles: Map<string, UserProfile> = new Map();
-
-  /** Usuario global en tiempo real (onAuthStateChanged). */
-  user$ = this.auth.user$;
-
-  /** Tareas del cliente activo en tiempo real. */
-  tasks$: Observable<Task[]> = this.auth.user$.pipe(
+  /**
+   * Perfil del usuario activo.
+   * `undefined` mientras se resuelve la sesión o se lee el perfil,
+   * `null` si no hay sesión. ensureUserProfile() crea el perfil si falta,
+   * por lo que un usuario autenticado siempre termina con uno.
+   */
+  profile$: Observable<UserProfile | null | undefined> = this.auth.user$.pipe(
     switchMap((user) => {
-      if (user) {
-        console.log('[Auth] Usuario autenticado, cargando tareas para uid:', user.uid);
-        return this.fs.watchTasks(user.uid);
+      if (user === undefined) {
+        console.log('[Auth] Resolviendo sesión guardada...');
+        return of(undefined);
       }
-      console.log('[Auth] Sin sesión activa.');
-      return of([]);
+      if (user === null) {
+        console.log('[Auth] Sin sesión activa.');
+        return of(null);
+      }
+      console.log('[Auth] Sesión activa → uid:', user.uid, '| resolviendo perfil...');
+      // startWith(undefined) mantiene el spinner mientras la promesa se resuelve
+      return from(this.fs.ensureUserProfile(user.uid, user.email ?? '')).pipe(
+        startWith(undefined),
+      );
+    }),
+    shareReplay({ bufferSize: 1, refCount: false }),
+  );
+
+  /** Tareas propias del cliente, en tiempo real. Vacío si el rol es admin. */
+  tasks$: Observable<Task[]> = this.profile$.pipe(
+    switchMap((profile) =>
+      profile && profile.role === 'client' ? this.fs.watchTasks(profile.uid) : of([]),
+    ),
+  );
+
+  /**
+   * Tareas de todos los clientes agrupadas por usuario, en tiempo real.
+   * Solo se activa cuando el rol es admin; en cualquier otro caso emite vacío
+   * y no abre ningún canal con Firestore.
+   */
+  adminGroups$: Observable<UserTaskGroup[]> = this.profile$.pipe(
+    switchMap((profile) => {
+      if (!profile || profile.role !== 'admin') return of([]);
+      console.log('[Admin] Rol administrador detectado, cargando panel global...');
+      return combineLatest([
+        this.fs.watchAllTasks(),
+        from(this.fs.getAllUserProfiles()),
+      ]).pipe(map(([tasks, profiles]) => this.groupByUser(tasks, profiles)));
     }),
   );
 
-  /** Todas las tareas en tiempo real (solo admin). */
-  allTasks$: Observable<Task[]> = of([]);
-
   constructor() {
-    addIcons({ createOutline, logOutOutline, trashOutline, peopleOutline });
+    addIcons({ createOutline, logOutOutline, peopleOutline, trashOutline });
     console.log('[App] HomePage inicializada.');
-  }
-
-  ngOnInit() {
-    // Cada vez que cambia el estado de autenticación, cargamos el rol del usuario
-    this.auth.user$.subscribe(async (user) => {
-      if (user) {
-        const profile = await this.fs.getUserProfile(user.uid);
-        this.userRole = profile?.role ?? 'client';
-        console.log('[Auth] Rol detectado:', this.userRole, '| uid:', user.uid);
-
-        if (this.userRole === 'admin') {
-          // Cargar perfiles de todos los usuarios para mostrar emails en el panel admin
-          const profiles = await this.fs.getAllUserProfiles();
-          this.userProfiles = new Map(profiles.map((p) => [p.uid, p]));
-          console.log('[Admin] Perfiles cargados:', profiles.length);
-          // Abrir canal en tiempo real de todas las tareas
-          this.allTasks$ = this.fs.watchAllTasks();
-        }
-      } else {
-        this.userRole = null;
-        this.userProfiles = new Map();
-        this.allTasks$ = of([]);
-      }
-    });
   }
 
   async submitAuth() {
@@ -115,7 +125,7 @@ export class HomePage implements OnInit {
       }
       this.password = '';
     } catch (e: any) {
-      console.warn('[Auth] Error → código:', e?.code);
+      console.warn('[Auth] Error → código:', e?.code, '| mensaje:', e?.message);
       this.errorMsg = this.translateError(e?.code);
     } finally {
       this.loading = false;
@@ -134,7 +144,10 @@ export class HomePage implements OnInit {
 
   async addTask(uid: string) {
     const title = this.newTitle.trim();
-    if (!title) return;
+    if (!title) {
+      console.warn('[Tarea] addTask cancelado: el título está vacío.');
+      return;
+    }
     const deadline = this.newDeadline || undefined;
     console.log('[Tarea] Creando →', { title, uid, deadline });
     this.newTitle = '';
@@ -144,7 +157,7 @@ export class HomePage implements OnInit {
   }
 
   toggleDone(task: Task) {
-    console.log('[Tarea] toggleDone → id:', task.id, '| done:', task.done, '→', !task.done);
+    console.log('[Tarea] toggleDone → id:', task.id, '|', task.done, '→', !task.done);
     return this.fs.updateTask(task.id!, { done: !task.done });
   }
 
@@ -175,30 +188,27 @@ export class HomePage implements OnInit {
     return this.fs.deleteTask(task.id!);
   }
 
-  /** Devuelve el email del dueño de una tarea usando el mapa de perfiles. */
-  getOwnerEmail(uid: string): string {
-    return this.userProfiles.get(uid)?.email ?? uid;
-  }
-
   /**
-   * Agrupa un array plano de tareas por uid del propietario.
-   * Usado en la vista del admin para mostrar secciones por usuario.
+   * Agrupa las tareas por propietario y resuelve el email de cada uno.
+   * Si un uid no tiene perfil en `users` se muestra el uid como identificador.
    */
-  groupByUser(tasks: Task[]): { uid: string; email: string; tasks: Task[] }[] {
-    const map = new Map<string, Task[]>();
-    for (const t of tasks) {
-      if (!map.has(t.uid)) map.set(t.uid, []);
-      map.get(t.uid)!.push(t);
+  private groupByUser(tasks: Task[], profiles: UserProfile[]): UserTaskGroup[] {
+    const emailByUid = new Map(profiles.map((p) => [p.uid, p.email]));
+    const tasksByUid = new Map<string, Task[]>();
+
+    for (const task of tasks) {
+      if (!tasksByUid.has(task.uid)) tasksByUid.set(task.uid, []);
+      tasksByUid.get(task.uid)!.push(task);
     }
-    return Array.from(map.entries()).map(([uid, tasks]) => ({
+
+    const groups = Array.from(tasksByUid, ([uid, tasks]) => ({
       uid,
-      email: this.getOwnerEmail(uid),
+      email: emailByUid.get(uid) ?? `(sin perfil) ${uid}`,
       tasks,
     }));
-  }
 
-  trackById(_: number, t: Task) {
-    return t.id;
+    console.log('[Admin] Tareas agrupadas en', groups.length, 'usuario(s).');
+    return groups;
   }
 
   private translateError(code?: string): string {

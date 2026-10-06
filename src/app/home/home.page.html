@@ -1,13 +1,17 @@
-<!-- CABECERA: muestra logout si hay sesión activa, y un ícono de admin si el rol es "admin" -->
+<!-- =====================================================================
+  CABECERA
+  El botón de logout y la insignia "Admin" dependen del perfil resuelto.
+===================================================================== -->
 <ion-header>
   <ion-toolbar color="primary">
     <ion-title>
       Gestor de Tareas
-      @if (userRole === 'admin') {
+      @if ((profile$ | async)?.role === 'admin') {
         <ion-badge color="warning" style="margin-left:8px; vertical-align:middle">Admin</ion-badge>
       }
     </ion-title>
-    @if (user$ | async; as user) {
+
+    @if (profile$ | async) {
       <ion-buttons slot="end">
         <ion-button (click)="logout()" aria-label="Cerrar sesión">
           <ion-icon slot="icon-only" name="log-out-outline"></ion-icon>
@@ -17,31 +21,46 @@
   </ion-toolbar>
 </ion-header>
 
+<!-- =====================================================================
+  CONTENIDO
+  Tres ramas excluyentes sobre profile$:
+    undefined → cargando (sesión o perfil)
+    objeto    → sesión activa (se bifurca por rol)
+    null      → sin sesión (login / registro)
+===================================================================== -->
 <ion-content class="ion-padding">
 
-  <!-- ESTADO 0: Resolviendo sesión persistida en IndexedDB -->
-  @if ((user$ | async) === undefined) {
-    <div class="ion-text-center ion-padding"><ion-spinner></ion-spinner></div>
+  <!-- ── Cargando: resolviendo sesión persistida o leyendo el perfil ── -->
+  @if ((profile$ | async) === undefined) {
+    <div class="ion-text-center ion-padding">
+      <ion-spinner></ion-spinner>
+      <p><ion-note>Cargando tu perfil...</ion-note></p>
+    </div>
 
-  <!-- ESTADO 2 y 3: Usuario autenticado -->
-  } @else if (user$ | async; as user) {
+  <!-- ── Sesión activa ─────────────────────────────────────────────── -->
+  } @else if (profile$ | async; as profile) {
 
-    <!-- Tarjeta de información de sesión -->
+    <!-- Tarjeta de información de la sesión -->
     <ion-card>
       <ion-card-header>
         <ion-card-title>Sesión activa</ion-card-title>
-        <ion-card-subtitle>Rol: {{ userRole }}</ion-card-subtitle>
+        <ion-card-subtitle>
+          Rol: {{ profile.role === 'admin' ? 'Administrador' : 'Cliente' }}
+        </ion-card-subtitle>
       </ion-card-header>
       <ion-card-content>
-        Conectado como <strong>{{ user.email }}</strong>
+        Conectado como <strong>{{ profile.email }}</strong>
         <ion-button fill="outline" size="small" class="ion-margin-start" (click)="logout()">
           Cerrar sesión
         </ion-button>
       </ion-card-content>
     </ion-card>
 
-    <!-- ── VISTA ADMIN: todas las tareas agrupadas por usuario ─────── -->
-    @if (userRole === 'admin') {
+    <!-- ── PANEL ADMINISTRADOR ───────────────────────────────────────
+      Muestra las tareas de todos los clientes agrupadas por usuario.
+      Solo lectura: el admin supervisa, no modifica tareas ajenas.
+    ──────────────────────────────────────────────────────────────── -->
+    @if (profile.role === 'admin') {
       <ion-card>
         <ion-card-header>
           <ion-card-title>
@@ -52,49 +71,48 @@
         </ion-card-header>
         <ion-card-content>
 
-          @if (allTasks$ | async; as allTasks) {
-            @if (allTasks.length === 0) {
+          @if (adminGroups$ | async; as groups) {
+            @for (group of groups; track group.uid) {
+              <!-- Encabezado de cada cliente con el número de tareas -->
+              <ion-item color="light">
+                <ion-label>
+                  <strong>{{ group.email }}</strong>
+                  <ion-badge color="primary" style="margin-left:8px">{{ group.tasks.length }}</ion-badge>
+                </ion-label>
+              </ion-item>
+
+              <ion-list>
+                @for (task of group.tasks; track task.id) {
+                  <ion-item>
+                    <!-- Checkbox deshabilitado: vista de supervisión -->
+                    <ion-checkbox slot="start" [checked]="task.done" [disabled]="true"></ion-checkbox>
+                    <ion-label [style.text-decoration]="task.done ? 'line-through' : 'none'">
+                      {{ task.title }}
+                      @if (task.deadline) {
+                        <p><small>Límite: {{ task.deadline }}</small></p>
+                      }
+                    </ion-label>
+                    <ion-note slot="end" [color]="task.done ? 'success' : 'medium'">
+                      {{ task.done ? 'Completada' : 'Pendiente' }}
+                    </ion-note>
+                  </ion-item>
+                }
+              </ion-list>
+            } @empty {
               <ion-item lines="none">
                 <ion-note>No hay tareas registradas en el sistema.</ion-note>
               </ion-item>
-            } @else {
-              <!-- groupByUser() agrupa el array plano por uid y devuelve { uid, email, tasks[] } -->
-              @for (group of groupByUser(allTasks); track group.uid) {
-                <!-- Sección por cada cliente -->
-                <ion-item color="light">
-                  <ion-label>
-                    <strong>{{ group.email }}</strong>
-                    <ion-badge color="primary" style="margin-left:8px">{{ group.tasks.length }}</ion-badge>
-                  </ion-label>
-                </ion-item>
-
-                <ion-list>
-                  @for (task of group.tasks; track task.id) {
-                    <ion-item>
-                      <!-- El admin solo visualiza, no puede modificar tareas ajenas -->
-                      <ion-checkbox slot="start" [checked]="task.done" [disabled]="true"></ion-checkbox>
-                      <ion-label [style.text-decoration]="task.done ? 'line-through' : 'none'">
-                        {{ task.title }}
-                        @if (task.deadline) {
-                          <p><small>Límite: {{ task.deadline }}</small></p>
-                        }
-                      </ion-label>
-                      <ion-note slot="end" color="{{ task.done ? 'success' : 'medium' }}">
-                        {{ task.done ? 'Completada' : 'Pendiente' }}
-                      </ion-note>
-                    </ion-item>
-                  }
-                </ion-list>
-              }
             }
           }
 
         </ion-card-content>
       </ion-card>
-    }
 
-    <!-- ── VISTA CLIENTE: tareas propias con CRUD completo ─────────── -->
-    @if (userRole === 'client') {
+    <!-- ── PANEL CLIENTE ─────────────────────────────────────────────
+      CRUD completo sobre las tareas propias. Es la rama por defecto:
+      cualquier rol distinto de "admin" ve esta vista.
+    ──────────────────────────────────────────────────────────────── -->
+    } @else {
       <ion-card>
         <ion-card-header>
           <ion-card-title>Mis tareas (tiempo real)</ion-card-title>
@@ -107,10 +125,11 @@
               label="Nueva tarea"
               labelPlacement="floating"
               [(ngModel)]="newTitle"
-              (keyup.enter)="addTask(user.uid)"
+              (keyup.enter)="addTask(profile.uid)"
             ></ion-input>
           </ion-item>
           <ion-item>
+            <!-- type="date" entrega el valor como string ISO "YYYY-MM-DD" -->
             <ion-input
               label="Fecha límite"
               labelPlacement="floating"
@@ -118,11 +137,11 @@
               [(ngModel)]="newDeadline"
             ></ion-input>
           </ion-item>
-          <ion-button expand="block" class="ion-margin-top" (click)="addTask(user.uid)">
+          <ion-button expand="block" class="ion-margin-top" (click)="addTask(profile.uid)">
             Agregar tarea
           </ion-button>
 
-          <!-- Lista de tareas en tiempo real -->
+          <!-- Lista en tiempo real alimentada por onSnapshot() -->
           @if (tasks$ | async; as tasks) {
             <ion-list>
               @for (task of tasks; track task.id) {
@@ -153,7 +172,7 @@
       </ion-card>
     }
 
-  <!-- ESTADO 1: Sin sesión → formulario de login / registro -->
+  <!-- ── Sin sesión: login / registro ──────────────────────────────── -->
   } @else {
     <ion-card>
       <ion-card-header>
@@ -165,7 +184,13 @@
             <ion-input label="Correo" labelPlacement="floating" type="email" [(ngModel)]="email"></ion-input>
           </ion-item>
           <ion-item>
-            <ion-input label="Contraseña" labelPlacement="floating" type="password" [(ngModel)]="password" (keyup.enter)="submitAuth()"></ion-input>
+            <ion-input
+              label="Contraseña"
+              labelPlacement="floating"
+              type="password"
+              [(ngModel)]="password"
+              (keyup.enter)="submitAuth()"
+            ></ion-input>
           </ion-item>
         </ion-list>
 
@@ -173,7 +198,12 @@
           <ion-note color="danger" class="ion-padding-top" style="display:block">{{ errorMsg }}</ion-note>
         }
 
-        <ion-button expand="block" class="ion-margin-top" [disabled]="loading || !email || !password" (click)="submitAuth()">
+        <ion-button
+          expand="block"
+          class="ion-margin-top"
+          [disabled]="loading || !email || !password"
+          (click)="submitAuth()"
+        >
           {{ isRegisterMode ? 'Registrarme' : 'Entrar' }}
         </ion-button>
         <ion-button expand="block" fill="clear" (click)="toggleMode()">

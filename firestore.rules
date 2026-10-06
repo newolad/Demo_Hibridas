@@ -2,26 +2,38 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Lee el rol del usuario que hace la petición desde su propio perfil.
+    function esAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
     // ── Perfiles de usuario ──────────────────────────────────────────
     match /users/{uid} {
-      // Cualquier usuario autenticado puede leer su propio perfil
-      allow read: if request.auth != null && request.auth.uid == uid;
-      // Solo el propio usuario puede crear su perfil (lo hace al registrarse)
-      allow create: if request.auth != null && request.auth.uid == uid;
-      // Nadie puede modificar su propio rol desde el cliente (solo desde la consola de Firebase)
+      // Cada usuario lee su propio perfil; el admin puede listar todos
+      // (lo necesita para mostrar el email de cada cliente en su panel).
+      allow read: if request.auth != null && (request.auth.uid == uid || esAdmin());
+
+      // Solo el propio usuario crea su perfil, y únicamente como "client".
+      // Esto evita que alguien se registre otorgándose el rol de admin.
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.role == 'client';
+
+      // El rol no se modifica desde la app: se cambia en Firebase Console.
       allow update, delete: if false;
     }
 
-    // ── Tareas ──────────────────────────────────────────────────────
+    // ── Tareas ───────────────────────────────────────────────────────
     match /tasks/{taskId} {
-      // El administrador puede leer todas las tareas
-      // Para identificarlo leemos su perfil en /users/{uid}
-      allow read: if request.auth != null && (
-        resource.data.uid == request.auth.uid ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-      );
-      allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
+      // El dueño lee sus tareas; el admin lee las de todos.
+      allow read: if request.auth != null
+        && (resource.data.uid == request.auth.uid || esAdmin());
+
+      // Crear, modificar y eliminar queda restringido al dueño de la tarea.
       allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
   }
 }
