@@ -10,11 +10,11 @@
 export const environment = {
   production: false,
   firebase: {
-    apiKey: 'TU_API_KEY',
-    authDomain: 'TU_PROYECTO.firebaseapp.com',
-    projectId: 'TU_PROYECTO',
-    storageBucket: 'TU_PROYECTO.appspot.com',
-    messagingSenderId: 'TU_SENDER_ID',
-    appId: 'TU_APP_ID',
+    apiKey: 'AIzaSyCvEpsNsCYGArmkzuURzNEr7z44p4H0H4U',
+    authDomain: 'fir-hibridas.firebaseapp.com',
+    projectId: 'fir-hibridas',
+    storageBucket: 'fir-hibridas.firebasestorage.app',
+    messagingSenderId: '482102994774',
+    appId: '1:482102994774:web:dd24dbdfd28aacc18dd8f7',
   },
 };

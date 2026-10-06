@@ -1,6 +1,17 @@
+<!-- =====================================================================
+  CABECERA DE LA APP (ion-header)
+  - ion-toolbar: barra superior con color primario del tema.
+  - ion-title: título fijo "Gestor de Tareas".
+  - @if (user$ | async): solo muestra el botón de logout cuando hay
+    un usuario autenticado (user$ emite un objeto User, no null/undefined).
+  - ion-buttons slot="end": coloca los botones al lado derecho de la barra.
+  - El botón de logout solo muestra un ícono (log-out-outline de Ionicons).
+===================================================================== -->
 <ion-header>
   <ion-toolbar color="primary">
     <ion-title>Gestor de Tareas</ion-title>
+
+    <!-- Botón logout: visible únicamente con sesión activa -->
     @if (user$ | async; as user) {
       <ion-buttons slot="end">
         <ion-button (click)="logout()" aria-label="Cerrar sesión">
@@ -11,27 +22,70 @@
   </ion-toolbar>
 </ion-header>
 
+<!-- =====================================================================
+  CONTENIDO PRINCIPAL (ion-content)
+  La vista tiene TRES estados excluyentes controlados por user$ (BehaviorSubject):
+
+  ESTADO 0 → user$ emite `undefined`
+    Firebase aún está resolviendo si existe una sesión guardada en
+    IndexedDB/localStorage. Se muestra un spinner mientras se espera.
+
+  ESTADO 1 → user$ emite `null`
+    No hay sesión activa. Se muestra el formulario de login / registro.
+
+  ESTADO 2 → user$ emite un objeto User
+    Sesión activa. Se muestran los datos del usuario y la lista de tareas.
+===================================================================== -->
 <ion-content class="ion-padding">
+
+  <!-- ── ESTADO 0: Resolviendo sesión persistida ─────────────────────
+    onAuthStateChanged (Firebase) dispara de forma asíncrona al arrancar.
+    Mientras no responde, user$ vale `undefined` y mostramos un spinner
+    centrado para evitar el parpadeo entre login y panel principal.
+  ──────────────────────────────────────────────────────────────────── -->
   @if ((user$ | async) === undefined) {
-    <!-- Resolviendo sesión persistida -->
-    <div class="ion-text-center ion-padding"><ion-spinner></ion-spinner></div>
+    <div class="ion-text-center ion-padding">
+      <ion-spinner></ion-spinner>
+    </div>
+
+  <!-- ── ESTADO 2: Usuario autenticado ──────────────────────────────
+    user$ emite un objeto User de Firebase Auth (email, uid, etc.).
+    Se divide en dos tarjetas:
+      · Tarjeta 1 – Información de sesión + botón logout.
+      · Tarjeta 2 – Formulario para crear tareas + lista en tiempo real.
+  ──────────────────────────────────────────────────────────────────── -->
   } @else if (user$ | async; as user) {
-    <!-- ESTADO 2: Panel principal -->
+
+    <!-- TARJETA 1: Información de la sesión activa -->
     <ion-card>
       <ion-card-header>
         <ion-card-title>Sesión activa</ion-card-title>
       </ion-card-header>
       <ion-card-content>
+        <!-- user.email proviene del objeto User de Firebase Auth -->
         Conectado como <strong>{{ user.email }}</strong>
-        <ion-button fill="outline" size="small" class="ion-margin-start" (click)="logout()">Cerrar sesión</ion-button>
+        <!-- Botón secundario de logout (el principal está en la cabecera) -->
+        <ion-button fill="outline" size="small" class="ion-margin-start" (click)="logout()">
+          Cerrar sesión
+        </ion-button>
       </ion-card-content>
     </ion-card>
 
+    <!-- TARJETA 2: Gestión de tareas en tiempo real -->
     <ion-card>
       <ion-card-header>
         <ion-card-title>Mis tareas (tiempo real)</ion-card-title>
       </ion-card-header>
       <ion-card-content>
+
+        <!-- ── Formulario de nueva tarea ────────────────────────────
+          · ion-input "Nueva tarea": ligado a `newTitle` con ngModel.
+            Al presionar Enter también llama a addTask() (keyup.enter).
+          · ion-input "Fecha límite": ligado a `newDeadline` (tipo date).
+            El navegador/dispositivo muestra un selector de calendario nativo.
+          · Botón "Agregar": envía el formulario pasando el uid del usuario
+            activo para asociar la tarea al propietario correcto en Firestore.
+        ──────────────────────────────────────────────────────────── -->
         <ion-item>
           <ion-input
             label="Nueva tarea"
@@ -39,56 +93,148 @@
             [(ngModel)]="newTitle"
             (keyup.enter)="addTask(user.uid)"
           ></ion-input>
-          <ion-button slot="end" (click)="addTask(user.uid)">Agregar</ion-button>
         </ion-item>
 
+        <!-- Campo de fecha límite: type="date" entrega el valor como
+             string ISO "YYYY-MM-DD" que guardamos directamente en Firestore -->
+        <ion-item>
+          <ion-input
+            label="Fecha límite"
+            labelPlacement="floating"
+            type="date"
+            [(ngModel)]="newDeadline"
+          ></ion-input>
+        </ion-item>
+
+        <ion-button expand="block" class="ion-margin-top" (click)="addTask(user.uid)">
+          Agregar tarea
+        </ion-button>
+
+        <!-- ── Lista de tareas ───────────────────────────────────────
+          tasks$ es un Observable<Task[]> que se alimenta de onSnapshot()
+          (Firestore tiempo real). Cada cambio en la BD actualiza la lista
+          automáticamente sin necesidad de recargar la página.
+
+          @for ... track task.id: Angular usa el id único de Firestore
+          para identificar cada elemento del DOM y evitar re-renderizados
+          innecesarios (optimización de rendimiento).
+
+          @empty: bloque alternativo cuando la lista está vacía.
+        ──────────────────────────────────────────────────────────── -->
         @if (tasks$ | async; as tasks) {
           <ion-list>
             @for (task of tasks; track task.id) {
               <ion-item>
-                <ion-checkbox slot="start" [checked]="task.done" (ionChange)="toggleDone(task)"></ion-checkbox>
-                <ion-label [style.text-decoration]="task.done ? 'line-through' : 'none'">{{ task.title }}</ion-label>
+                <!-- Checkbox: marca/desmarca la tarea como completada.
+                     ionChange llama a toggleDone() que actualiza `done`
+                     en Firestore; el cambio vuelve vía onSnapshot. -->
+                <ion-checkbox
+                  slot="start"
+                  [checked]="task.done"
+                  (ionChange)="toggleDone(task)"
+                ></ion-checkbox>
+
+                <!-- Etiqueta: tachado CSS cuando done === true.
+                     Muestra el título y, si existe, la fecha límite formateada. -->
+                <ion-label [style.text-decoration]="task.done ? 'line-through' : 'none'">
+                  {{ task.title }}
+                  <!-- Fecha límite: solo se renderiza si el campo existe en el documento -->
+                  @if (task.deadline) {
+                    <p>
+                      <small>Límite: {{ task.deadline }}</small>
+                    </p>
+                  }
+                </ion-label>
+
+                <!-- Botón editar: abre un Alert nativo de Ionic con un input
+                     de texto prellenado con el título actual de la tarea. -->
                 <ion-button fill="clear" slot="end" (click)="editTask(task)" aria-label="Editar">
                   <ion-icon slot="icon-only" name="create-outline"></ion-icon>
                 </ion-button>
+
+                <!-- Botón eliminar: llama a deleteTask() que ejecuta
+                     deleteDoc() en Firestore; onSnapshot refleja el cambio. -->
                 <ion-button fill="clear" color="danger" slot="end" (click)="deleteTask(task)" aria-label="Eliminar">
                   <ion-icon slot="icon-only" name="trash-outline"></ion-icon>
                 </ion-button>
               </ion-item>
             } @empty {
-              <ion-item lines="none"><ion-note>No hay tareas todavía. ¡Agrega la primera!</ion-note></ion-item>
+              <!-- Mensaje cuando el usuario no tiene ninguna tarea creada -->
+              <ion-item lines="none">
+                <ion-note>No hay tareas todavía. ¡Agrega la primera!</ion-note>
+              </ion-item>
             }
           </ion-list>
         }
+
       </ion-card-content>
     </ion-card>
+
+  <!-- ── ESTADO 1: Sin sesión (login / registro) ────────────────────
+    Se muestra cuando user$ emite `null` (ninguna sesión guardada).
+    isRegisterMode alterna entre el formulario de inicio de sesión
+    y el de creación de cuenta (toggle con el botón de texto inferior).
+  ──────────────────────────────────────────────────────────────────── -->
   } @else {
-    <!-- ESTADO 1: Login / Registro -->
+
     <ion-card>
       <ion-card-header>
+        <!-- El título cambia dinámicamente según el modo activo -->
         <ion-card-title>{{ isRegisterMode ? 'Crear cuenta' : 'Iniciar sesión' }}</ion-card-title>
       </ion-card-header>
       <ion-card-content>
+
+        <!-- Campos del formulario: email y contraseña ligados con ngModel.
+             type="email" activa el teclado de correo en dispositivos móviles.
+             type="password" oculta los caracteres escritos. -->
         <ion-list>
           <ion-item>
-            <ion-input label="Correo" labelPlacement="floating" type="email" [(ngModel)]="email"></ion-input>
+            <ion-input
+              label="Correo"
+              labelPlacement="floating"
+              type="email"
+              [(ngModel)]="email"
+            ></ion-input>
           </ion-item>
           <ion-item>
-            <ion-input label="Contraseña" labelPlacement="floating" type="password" [(ngModel)]="password" (keyup.enter)="submitAuth()"></ion-input>
+            <!-- keyup.enter permite enviar el formulario con la tecla Enter -->
+            <ion-input
+              label="Contraseña"
+              labelPlacement="floating"
+              type="password"
+              [(ngModel)]="password"
+              (keyup.enter)="submitAuth()"
+            ></ion-input>
           </ion-item>
         </ion-list>
 
+        <!-- Mensaje de error: solo visible cuando errorMsg tiene contenido.
+             Los códigos de error de Firebase se traducen en home.page.ts. -->
         @if (errorMsg) {
-          <ion-note color="danger" class="ion-padding-top" style="display:block">{{ errorMsg }}</ion-note>
+          <ion-note color="danger" class="ion-padding-top" style="display:block">
+            {{ errorMsg }}
+          </ion-note>
         }
 
-        <ion-button expand="block" class="ion-margin-top" [disabled]="loading || !email || !password" (click)="submitAuth()">
+        <!-- Botón principal: deshabilitado si ya hay una petición en curso
+             (`loading`) o si alguno de los campos está vacío. -->
+        <ion-button
+          expand="block"
+          class="ion-margin-top"
+          [disabled]="loading || !email || !password"
+          (click)="submitAuth()"
+        >
           {{ isRegisterMode ? 'Registrarme' : 'Entrar' }}
         </ion-button>
+
+        <!-- Botón secundario: alterna entre modo login y modo registro
+             sin navegar a otra pantalla (SPA de una sola página). -->
         <ion-button expand="block" fill="clear" (click)="toggleMode()">
           {{ isRegisterMode ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate' }}
         </ion-button>
+
       </ion-card-content>
     </ion-card>
   }
+
 </ion-content>
